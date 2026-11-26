@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { loadTerrain, buildTerrainMesh, toVec } from './terrain.js';
+import { loadBuildings, buildBuildingMesh } from './buildings.js';
 import { RUNWAYS, buildRunways } from './runways.js';
 import { createTraffic } from './planes.js';
 import { buildTerminal, buildMassing, describe, GROUPS, floorBase } from './indoor.js';
@@ -59,11 +60,12 @@ function label(text, cls = 'label') {
 }
 
 // --- データの読み込み ---
-const [terrain, photo, terminals] = await Promise.all([
+const [terrain, photo, terminals, buildingList] = await Promise.all([
   loadTerrain(BASE),
   new THREE.TextureLoader().loadAsync(`${BASE}data/photo.jpg`),
   fetch(`${BASE}data/indoor/index.json`).then((r) => r.json()).then((list) =>
     Promise.all(list.map((t) => fetch(`${BASE}data/indoor/${t.id}.json`).then((r) => r.json())))),
+  loadBuildings(BASE),
 ]);
 photo.colorSpace = THREE.SRGBColorSpace;
 photo.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -73,6 +75,9 @@ const exterior = new THREE.Group();
 scene.add(exterior);
 const land = buildTerrainMesh(terrain, photo);
 exterior.add(land.group);
+// 周りの建物 (高さは目安)。高さは標高 + 建物の高さで作ってあり、強調の倍率は scale.y で掛ける
+const buildings = buildBuildingMesh(buildingList, terrain.sample);
+exterior.add(buildings);
 let exaggeration = 2;
 const ground = (x, y) => terrain.sample(x, y) * exaggeration;
 
@@ -93,6 +98,7 @@ const center = (t) => ({ x: (t.bbox[0] + t.bbox[2]) / 2, y: (t.bbox[1] + t.bbox[
 
 function placeExterior() {
   land.setExaggeration(exaggeration);
+  buildings.scale.y = exaggeration;
   if (runways) {
     exterior.remove(runways.group);
     runways.group.traverse((o) => o.geometry?.dispose());
@@ -109,7 +115,9 @@ function placeExterior() {
     const c = center(m.data);
     m.ground = ground(c.x, c.y);
     m.mesh.position.y = m.ground;
-    m.label.position.copy(toVec(c.x, c.y, m.ground + 45));
+    // ターミナルの高さにも、周りの建物と同じく強調の倍率を掛ける
+    m.mesh.scale.y = exaggeration;
+    m.label.position.copy(toVec(c.x, c.y, m.ground + 30 * exaggeration + 15));
   }
 }
 placeExterior();
@@ -166,7 +174,8 @@ function overview() {
   if (mode === 'exterior') {
     controls.minDistance = 300;
     controls.maxDistance = 40000;
-    flyTo(toVec(400, -1500, 40), 11000, 0.85, -0.3);
+    // 建物の高さがわかるよう、ターミナルのあたりを斜めから見下ろす
+    flyTo(toVec(700, -2200, 40), 7000, 1.05, -0.45);
     return;
   }
   const t = indoor.get(mode);

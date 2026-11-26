@@ -9,13 +9,16 @@
     "preview": "vite preview",
     "data:indoor": "node scripts/build-indoor.mjs",
     "data:terrain": "node scripts/build-terrain.mjs",
-    "data": "npm run data:indoor && npm run data:terrain"
+    "data:buildings": "node scripts/build-buildings.mjs",
+    "data": "npm run data:indoor && npm run data:terrain && npm run data:buildings"
   },
   "dependencies": {
     "three": "0.187.0"
   },
   "devDependencies": {
+    "@mapbox/vector-tile": "3.0.0",
     "fflate": "0.8.2",
+    "pbf": "5.0.0",
     "sharp": "0.35.5",
     "vite": "7.3.8"
   }

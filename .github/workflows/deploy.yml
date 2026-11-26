@@ -29,6 +29,9 @@ jobs:
       # 地形・空中写真は国土地理院のタイルから作り直す。取得できなければリポジトリにある前回の分を使う
       - name: 地形データを作り直す
         run: npm run data:terrain || (git checkout -- public/data && echo "::warning::国土地理院のタイルを取得できなかったため、前回の地形データを使います")
+      # 周りの建物は国土地理院のベクトルタイルから作り直す。取得できなければ前回の分を使う
+      - name: 建物データを作り直す
+        run: npm run data:buildings || (git checkout -- public/data/buildings.bin && echo "::warning::国土地理院のベクトルタイルを取得できなかったため、前回の建物データを使います")
       - run: npm run build
       - uses: actions/upload-pages-artifact@v4
         with:
