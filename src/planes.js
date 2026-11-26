@@ -52,6 +52,8 @@ function planeModel(color) {
   }
   const stripe = new THREE.Mesh(new THREE.CylinderGeometry(2.85, 2.85, 40, 12, 1, true, Math.PI * 0.35, Math.PI * 0.3), tint);
   stripe.rotation.x = Math.PI / 2;
+  // 機内から見るときは胴体を隠し、翼とエンジンだけ見えるようにする
+  for (const m of [body, nose, tail, stripe, fin]) m.userData.hull = true;
   g.add(body, nose, tail, wingR, wingL, fin, stabR, stabL, stripe);
   g.scale.setScalar(SCALE);
   g.traverse((o) => { if (o.isMesh) o.material = o.material.clone(); });
@@ -80,7 +82,8 @@ function landingState(r, tau, ground) {
     if (fade <= 0) return null;
   }
   const p = along(r, t, ground);
-  return { x: p.x, y: p.y, h: p.h + alt + 3.5 * SCALE, pitch, fade };
+  const phase = tau < tApproach ? '着陸のため降下中' : '着陸して減速中';
+  return { x: p.x, y: p.y, h: p.h + alt + 3.5 * SCALE, alt, pitch, fade, phase };
 }
 
 function takeoffState(r, tau, ground) {
@@ -103,8 +106,17 @@ function takeoffState(r, tau, ground) {
     fade = Math.min(1, (r.len + 13000 - t) / 2000);
   }
   const p = along(r, t, ground);
-  return { x: p.x, y: p.y, h: p.h + alt + 3.5 * SCALE, pitch, fade };
+  const phase = tau < tRot ? '離陸のため加速中' : '上昇中';
+  return { x: p.x, y: p.y, h: p.h + alt + 3.5 * SCALE, alt, pitch, fade, phase };
 }
+
+const stateOf = (f, tau, ground) => (f.kind === 'land' ? landingState(f.r, tau, ground) : takeoffState(f.r, tau, ground));
+
+// 乗ったときのカメラの位置 (飛行機のモデルの座標。前が +z、左が +x) と、最初に見る向き (左が正の度)
+export const SEATS = {
+  cockpit: { name: '操縦席', pos: [0, 1.3, 26], yaw: 0, pitch: -4 },
+  window: { name: '客席の窓（左側）', pos: [3.1, 0.8, -14], yaw: 70, pitch: -14 }, // 翼の後ろの席
+};
 
 export function createTraffic(scene) {
   const flights = [];
@@ -143,15 +155,21 @@ export function createTraffic(scene) {
     for (let i = flights.length - 1; i >= 0; i--) {
       const f = flights[i];
       const tau = simTime - f.start;
-      const st = f.kind === 'land' ? landingState(f.r, tau, ground) : takeoffState(f.r, tau, ground);
+      const st = stateOf(f, tau, ground);
       if (!st) {
+        f.ended = true;
         scene.remove(f.obj);
         f.obj.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
         flights.splice(i, 1);
         continue;
       }
       f.obj.visible = visible;
-      f.obj.position.copy(toVec(st.x, st.y, st.h));
+      const pos = toVec(st.x, st.y, st.h);
+      // 速さ (実際の速さに直したもの、m/s)
+      if (f.last && dt > 0) f.speed = pos.distanceTo(f.last) / (dt * SIM_SPEED);
+      f.last = pos.clone();
+      f.state = st;
+      f.obj.position.copy(pos);
       fwd.copy(toVec(f.r.u.x, f.r.u.y, 0)).normalize();
       fwd.y = Math.tan(st.pitch);
       f.obj.lookAt(f.obj.position.clone().add(fwd));
@@ -163,5 +181,13 @@ export function createTraffic(scene) {
   function warmUp(ground) {
     for (let k = 0; k < 120; k++) update(1, ground, true);
   }
-  return { update, warmUp, flights };
+  /** 飛行の残り時間 (画面の上の秒)。乗る飛行機を選ぶのに使う */
+  /** 始まってからの時間 (模擬の秒) */
+  const elapsed = (f) => simTime - f.start;
+  function remaining(f, ground) {
+    let tau = simTime - f.start, k = 0;
+    while (stateOf(f, tau, ground) && k < 2000) { tau += 1; k++; }
+    return k / SIM_SPEED;
+  }
+  return { update, warmUp, flights, remaining, elapsed };
 }

@@ -4,8 +4,10 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import { loadTerrain, buildTerrainMesh, toVec } from './terrain.js';
 import { loadBuildings, buildBuildingMesh } from './buildings.js';
 import { RUNWAYS, buildRunways } from './runways.js';
-import { createTraffic } from './planes.js';
-import { buildTerminal, buildMassing, describe, GROUPS, floorBase } from './indoor.js';
+import { createTraffic, SEATS } from './planes.js';
+import { buildTerminal, buildMassing, describe, GROUPS, floorBase, centroid } from './indoor.js';
+import { createRide } from './ride.js';
+import { loadNetwork, nearestNode, findRoute, describeRoute, buildRouteView } from './route.js';
 
 const BASE = import.meta.env.BASE_URL;
 const $ = (id) => document.getElementById(id);
@@ -39,11 +41,15 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-3000, 6000, 2000);
 scene.add(sun);
 
+const lineResolution = new THREE.Vector2(1, 1);
+let afterResize = null; // 経路の線の太さを画面の大きさに合わせ直す (経路案内の準備ができてから設定する)
 function resize() {
   document.documentElement.style.setProperty('--bar-h', `${$('bar').offsetHeight}px`);
   const w = container.clientWidth, h = container.clientHeight;
   renderer.setSize(w, h);
   labelRenderer.setSize(w, h);
+  lineResolution.set(w, h);
+  afterResize?.();
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -67,6 +73,7 @@ const [terrain, photo, terminals, buildingList] = await Promise.all([
     Promise.all(list.map((t) => fetch(`${BASE}data/indoor/${t.id}.json`).then((r) => r.json())))),
   loadBuildings(BASE),
 ]);
+const network = await loadNetwork(BASE);
 photo.colorSpace = THREE.SRGBColorSpace;
 photo.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
@@ -126,6 +133,66 @@ const traffic = createTraffic(exterior);
 traffic.warmUp(ground);
 let planesOn = true;
 
+// --- 飛行機に乗る ---
+const ride = createRide({
+  camera,
+  canvas: renderer.domElement,
+  onExit: (saved) => {
+    $('cab').hidden = true;
+    $('side').hidden = false;
+    controls.enabled = true;
+    if (saved) {
+      camera.position.copy(saved.position);
+      controls.target.copy(saved.target);
+    }
+    controls.update();
+  },
+});
+function boardFlight(f) {
+  if (!f) return;
+  if (!ride.active) {
+    const saved = { position: camera.position.clone(), target: controls.target.clone() };
+    ride.enter(f, saved);
+  } else ride.enter(f);
+  planesOn = true;
+  controls.enabled = false;
+  hideInfo();
+  $('side').hidden = true;
+  $('cab').hidden = false;
+  renderCab();
+}
+/** 乗る飛行機を選ぶ: 指定の種類 (着陸・離陸) のうち、始まったばかりのもの */
+function boardNewest(kind) {
+  let best = null;
+  for (const f of traffic.flights) {
+    if (f.kind !== kind || traffic.remaining(f, ground) < 20) continue;
+    if (!best || traffic.elapsed(f) < traffic.elapsed(best)) best = f;
+  }
+  boardFlight(best);
+}
+function renderCab() {
+  const seats = $('cab-seats');
+  seats.replaceChildren();
+  for (const [key, s] of Object.entries(SEATS)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = s.name;
+    b.setAttribute('aria-pressed', String(ride.seat === key));
+    b.onclick = () => { ride.setSeat(key); renderCab(); };
+    seats.appendChild(b);
+  }
+  $('cab-hint').textContent = ride.HINT;
+}
+$('cab-exit').onclick = () => ride.exit();
+function updateCabStatus() {
+  const f = ride.flight;
+  if (!f?.state) return;
+  const kind = f.kind === 'land' ? `${f.r.name}（${f.r.ends[1]}）に着陸` : `${f.r.name}（${f.r.ends[1]}）から離陸`;
+  const speed = Math.round((f.speed ?? 0) * 3.6);
+  const alt = Math.round(f.state.alt);
+  $('cab-status').textContent = `${kind}・${f.state.phase}　速さ 約${speed} km/h　高さ 約${alt} m`;
+}
+
 // --- 屋内 ---
 const indoor = new Map();
 for (const t of terminals) {
@@ -147,6 +214,8 @@ function flyTo(target, distance, polar = 0.9, azimuth = -0.35) {
 }
 
 function setMode(next, floor) {
+  if (ride.active) ride.exit();
+  cancelPick();
   mode = next;
   const isExt = mode === 'exterior';
   exterior.visible = isExt;
@@ -162,6 +231,8 @@ function setMode(next, floor) {
     t.view.setBadgeFilter(badgeKeys);
   }
   overview();
+  if (routeState.view) routeState.view.visible = !isExt;
+  if (!isExt) drawRoute();
   renderNav();
   renderFloors();
   renderSide();
@@ -229,6 +300,7 @@ function renderFloors() {
       camera.position.y += dy;
       hideInfo();
       renderFloors();
+      drawRoute();
       history.replaceState(null, '', `#${mode}/${f.ordinal}`);
     };
     box.appendChild(b);
@@ -267,10 +339,18 @@ function renderSide() {
     cb.type = 'checkbox'; cb.checked = planesOn;
     cb.onchange = () => { planesOn = cb.checked; };
     pl.append(cb, '飛行機の離着陸（模擬）');
+    const boardBtns = [['land', '着陸する飛行機に乗る'], ['take', '離陸する飛行機に乗る']].map(([kind, text]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.className = 'wide';
+      b.onclick = () => boardNewest(kind);
+      return b;
+    });
     const p = document.createElement('p');
     p.className = 'note';
-    p.textContent = 'ドラッグで回転、右ドラッグ（2本指）で移動、ホイール（ピンチ）でズーム。ターミナルをクリックすると屋内を表示します。';
-    side.append(ex, pl, p);
+    p.textContent = 'ドラッグで回転、右ドラッグ（2本指）で移動、ホイール（ピンチ）でズーム。ターミナルをクリックすると屋内を、飛行機をクリックするとその飛行機に乗った眺めを表示します。';
+    side.append(ex, pl, ...boardBtns, p);
     return;
   }
   h.textContent = '凡例';
@@ -314,7 +394,205 @@ function renderSide() {
   p.className = 'note';
   p.textContent = 'ドラッグで回転、右ドラッグ（2本指）で移動、ホイール（ピンチ）でズーム。チェックで階段・エレベーター・エスカレーター・トイレのアイコンを表示します。区画をクリックすると種類を表示します。店名はデータに含まれていません（2021年3月時点のデータ）。';
   side.append(ul, p);
+  panel.appendChild(renderRoutePanel());
 }
+
+// --- 経路案内 ---
+// 出発地・目的地は { label, nodes: [ノード番号...] }。目的地に複数のノードがあれば一番近いところへ行く
+const routeState = { start: null, goal: null, barrierFree: false, route: null, view: null, summary: null, open: window.innerWidth > 640 };
+const floorLabelOf = (ord) => {
+  for (const t of terminals) {
+    const f = t.floors.find((x) => x.ordinal === ord && x.ordinal !== 0);
+    if (f) return f.label;
+  }
+  return ord < 0 ? `B${-ord}F` : `${ord}F`;
+};
+// ノードは 1階屋外 (0) を持たないので、0 の地点は 1階のノードに寄せる
+const nodeOrd = (ord) => (ord === 0 ? 1 : ord);
+
+/** そのターミナルの選べる地点 (出入口・トイレ) */
+function placesOf(t) {
+  const exits = [], toilets = [], multi = [];
+  for (const fl of t.data.floors) {
+    for (const p of fl.points) {
+      if (p.c !== 'F017' || !p.n) continue;
+      const node = nearestNode(network, p.x / 10, p.y / 10, nodeOrd(fl.ordinal), 60);
+      if (node != null) exits.push({ label: `${fl.label.replace('屋外', '')} ${p.n}`, nodes: [node], ord: fl.ordinal });
+    }
+    for (const sp of fl.spaces) {
+      if (!/^B0(0[7-9]|1[0-4])$/.test(sp.c)) continue;
+      const c = centroid(sp.poly[0]);
+      const node = nearestNode(network, c.x, c.y, nodeOrd(fl.ordinal), 30);
+      if (node == null) continue;
+      toilets.push(node);
+      if (/^B01[1-4]$/.test(sp.c)) multi.push(node);
+    }
+  }
+  exits.sort((a, b) => a.ord - b.ord || a.label.localeCompare(b.label, 'ja'));
+  return { exits, toilets: [...new Set(toilets)], multi: [...new Set(multi)] };
+}
+const placesCache = new Map();
+const places = (id) => {
+  if (!placesCache.has(id)) placesCache.set(id, placesOf(indoor.get(id)));
+  return placesCache.get(id);
+};
+
+let pickTarget = null; // 'start' | 'goal' (地図で選んでいるとき)
+function cancelPick() {
+  pickTarget = null;
+  $('pick-hint').hidden = true;
+}
+
+function renderRoutePanel() {
+  const box = document.createElement('details');
+  box.className = 'route';
+  box.open = routeState.open;
+  box.ontoggle = () => { routeState.open = box.open; };
+  const sum = document.createElement('summary');
+  sum.textContent = '経路案内';
+  box.appendChild(sum);
+  const pl = places(mode);
+
+  const selectFor = (which) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = document.createElement('span');
+    name.textContent = which === 'start' ? '出発地' : '目的地';
+    const sel = document.createElement('select');
+    const opt = (value, text) => {
+      const o = document.createElement('option');
+      o.value = value; o.textContent = text;
+      sel.appendChild(o);
+      return o;
+    };
+    const cur = routeState[which];
+    opt('', cur ? cur.label : '選んでください').selected = true;
+    opt('pick', '地図で選ぶ…');
+    if (which === 'goal') {
+      if (pl.toilets.length) opt('toilet', '最寄りのトイレ');
+      if (pl.multi.length) opt('multi', '最寄りの多機能トイレ');
+    }
+    const group = document.createElement('optgroup');
+    group.label = '出入口';
+    pl.exits.forEach((e, i) => {
+      const o = document.createElement('option');
+      o.value = `exit:${i}`; o.textContent = e.label;
+      group.appendChild(o);
+    });
+    sel.appendChild(group);
+    sel.onchange = () => {
+      const v = sel.value;
+      if (v === 'pick') {
+        pickTarget = which;
+        $('pick-hint').textContent = `フロアをクリックして${which === 'start' ? '出発地' : '目的地'}を選んでください（Esc でやめる）`;
+        $('pick-hint').hidden = false;
+        return;
+      }
+      if (v === 'toilet') routeState.goal = { label: '最寄りのトイレ', nodes: pl.toilets };
+      else if (v === 'multi') routeState.goal = { label: '最寄りの多機能トイレ', nodes: pl.multi };
+      else if (v.startsWith('exit:')) routeState[which] = pl.exits[Number(v.slice(5))];
+      updateRoute();
+    };
+    row.append(name, sel);
+    return row;
+  };
+  box.append(selectFor('start'), selectFor('goal'));
+
+  const bf = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = routeState.barrierFree;
+  cb.onchange = () => { routeState.barrierFree = cb.checked; updateRoute(); };
+  bf.append(cb, '階段・エスカレーターを使わない（エレベーターで移動）');
+  box.appendChild(bf);
+
+  const r = routeState.summary;
+  if (r === 'none') {
+    const p = document.createElement('p');
+    p.className = 'summary';
+    p.textContent = '経路が見つかりませんでした';
+    box.appendChild(p);
+  } else if (r) {
+    const p = document.createElement('p');
+    p.className = 'summary';
+    p.textContent = `約 ${Math.round(r.meters)} m・約 ${Math.max(1, Math.round(r.minutes))} 分`;
+    const ol = document.createElement('ol');
+    for (const st of r.steps) {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = st.text;
+      b.title = 'この階を表示';
+      b.onclick = () => showFloorOf(st.ord);
+      li.appendChild(b);
+      ol.appendChild(li);
+    }
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.textContent = '経路を消す';
+    clear.onclick = () => {
+      routeState.start = routeState.goal = null;
+      routeState.route = null;
+      routeState.summary = null;
+      drawRoute();
+      renderSide();
+    };
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.textContent = '歩行ネットワーク（2021年3月時点）による目安です。保安検査場や出国審査の手続き、通れない時間帯は考えていません。';
+    box.append(p, ol, clear, note);
+  }
+  return box;
+}
+
+/** 経路の段の階を表示する (そのターミナルにある階なら) */
+function showFloorOf(ord) {
+  const t = indoor.get(mode);
+  if (!t || !t.view.floors.has(ord)) return;
+  t.floor = ord;
+  t.view.showFloor(ord);
+  const dy = floorBase(ord) - controls.target.y;
+  controls.target.y += dy;
+  camera.position.y += dy;
+  renderFloors();
+  drawRoute();
+  history.replaceState(null, '', `#${mode}/${ord}`);
+}
+
+function updateRoute() {
+  const { start, goal } = routeState;
+  routeState.route = null;
+  routeState.summary = null;
+  if (start && goal) {
+    const route = findRoute(network, start.nodes[0], goal.nodes, { barrierFree: routeState.barrierFree });
+    if (route) {
+      routeState.route = route;
+      routeState.summary = describeRoute(network, route, floorLabelOf);
+      sideOpen = false; // 手順が見えるよう凡例を畳む
+      // 出発地の階を表示する
+      showFloorOf(network.node(route.start).ord);
+    } else routeState.summary = 'none';
+  }
+  drawRoute();
+  renderSide();
+}
+
+function drawRoute() {
+  if (routeState.view) {
+    scene.remove(routeState.view);
+    routeState.view.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+      if (o.isCSS2DObject) o.element.remove();
+    });
+    routeState.view = null;
+  }
+  if (!routeState.route || mode === 'exterior') return;
+  routeState.view = buildRouteView(network, routeState.route, indoor.get(mode).floor, lineResolution);
+  scene.add(routeState.view);
+}
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancelPick(); });
+afterResize = () => { if (routeState.route) drawRoute(); };
 
 function showInfo(d) {
   const box = $('info');
@@ -337,6 +615,7 @@ const ray = new THREE.Raycaster();
 let down = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
 renderer.domElement.addEventListener('pointerup', (e) => {
+  if (ride.active) { down = null; return; }
   if (!down || !e.isPrimary) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
   const quick = performance.now() - down.t < 500;
@@ -345,11 +624,30 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const r = renderer.domElement.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   if (mode === 'exterior') {
+    const planeHit = planesOn && ray.intersectObjects(traffic.flights.map((f) => f.obj), true)[0];
+    if (planeHit) {
+      const f = traffic.flights.find((x) => planeHit.object.parent === x.obj || planeHit.object === x.obj);
+      if (f) { boardFlight(f); return; }
+    }
     const hit = ray.intersectObjects(massing.map((m) => m.mesh))[0];
     if (hit) setMode(hit.object.userData.id);
     return;
   }
   const hit = ray.intersectObjects(indoor.get(mode).view.pickables())[0];
+  if (pickTarget) {
+    if (!hit) return;
+    const t = indoor.get(mode);
+    const node = nearestNode(network, hit.point.x, -hit.point.z, nodeOrd(t.floor), 60);
+    if (node == null) {
+      $('pick-hint').textContent = '近くに通路がありません。通路の近くをクリックしてください（Esc でやめる）';
+      return;
+    }
+    const fl = t.view.floors.get(t.floor).info;
+    routeState[pickTarget] = { label: `${fl.label} の地図で選んだ地点`, nodes: [node] };
+    cancelPick();
+    updateRoute();
+    return;
+  }
   const d = hit && describe(hit.object.userData);
   d ? showInfo(d) : hideInfo();
 });
@@ -367,13 +665,16 @@ $('loading').hidden = true;
 $('credit-toggle').onclick = () => { $('credit-body').hidden = !$('credit-body').hidden; };
 
 const timer = new THREE.Timer();
-if (import.meta.env.DEV) window.__map = { camera, controls, traffic, toVec };
+if (import.meta.env.DEV) window.__map = { camera, controls, traffic, toVec, ride, boardNewest, routeState, network };
 
 renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(0.1, timer.getDelta());
-  if (mode === 'exterior') traffic.update(dt, ground, planesOn);
-  controls.update();
+  if (mode === 'exterior') traffic.update(dt, ground, planesOn || ride.active);
+  if (ride.active) {
+    ride.update();
+    updateCabStatus();
+  } else controls.update();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 });
