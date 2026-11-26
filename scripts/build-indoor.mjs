@@ -151,3 +151,43 @@ for (const t of TERMINALS) {
   console.log(`${t.id}: ${list.map((f) => f.label).join(' ')} / 商業施設 ${counts('B001')} 階段 ${counts('B021')} EV ${counts('B022')} ES ${counts('B023')} / ${(text.length / 1024).toFixed(0)} KB`);
 }
 await fs.writeFile(path.join(OUT, 'index.json'), JSON.stringify(index, null, 1));
+
+// --- 歩行ネットワーク (経路案内に使う) ---
+//   出力: public/data/indoor/network.json
+//     nodes: [x, y, 階] を平らに並べたもの (x, y は 0.1 m 単位)
+//     links: [始点, 終点, 種別, 向き, 長さ (0.1 m), 途中の点 (x, y を平らに)] の配列
+//       種別: 1 通路, 2 動く歩道, 4 エレベーター, 5 エスカレーター, 6 階段, 7 スロープ (製品仕様書の route_type)
+//       向き: 1 両方向, 2 始点から終点へだけ (エスカレーターなど)
+{
+  const nodeShp = readShp(files.get('nw/nrt_node.shp'));
+  const nodeRows = readDbf(files.get('nw/nrt_node.dbf'));
+  const linkShp = readShp(files.get('nw/nrt_link.shp'));
+  const linkRows = readDbf(files.get('nw/nrt_link.dbf'));
+  const indexOf = new Map();
+  const nodes = [];
+  nodeRows.forEach((n, i) => {
+    const [lon, lat] = nodeShp[i][0][0];
+    const p = project(lon, lat);
+    indexOf.set(n.node_id, i);
+    nodes.push(r1(p.x), r1(p.y), Math.round(Number(n.ordinal)));
+  });
+  const links = [];
+  linkRows.forEach((l, i) => {
+    const a = indexOf.get(l.start_id), b = indexOf.get(l.end_id);
+    if (a == null || b == null) return;
+    const type = Number(l.route_type) === 99 ? 1 : Number(l.route_type);
+    const dir = Number(l.direction) === 2 ? 2 : Number(l.direction) === 3 ? 3 : 1;
+    const pts = simplify(toLocal(linkShp[i][0]), TOLERANCE).slice(1, -1).flatMap(([x, y]) => [r1(x), r1(y)]);
+    // 向き 3 (終点から始点へ) は、始点と終点を入れ替えて 2 にそろえる
+    if (dir === 3) {
+      const back = [];
+      for (let k = pts.length - 2; k >= 0; k -= 2) back.push(pts[k], pts[k + 1]);
+      links.push([b, a, type, 2, r1(Number(l.distance)), back]);
+    } else {
+      links.push([a, b, type, dir, r1(Number(l.distance)), pts]);
+    }
+  });
+  const text = JSON.stringify({ nodes, links });
+  await fs.writeFile(path.join(OUT, 'network.json'), text);
+  console.log(`歩行ネットワーク: ノード ${nodes.length / 3}、リンク ${links.length} / ${(text.length / 1024).toFixed(0)} KB`);
+}

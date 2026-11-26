@@ -41,7 +41,7 @@ function outlineGeometry(polys, y) {
   return g;
 }
 
-function centroid(flat) {
+export function centroid(flat) {
   let a = 0, cx = 0, cy = 0;
   for (let i = 0; i < flat.length; i += 2) {
     const j = (i + 2) % flat.length;
