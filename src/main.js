@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MapControls } from 'three/addons/controls/MapControls.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { loadTerrain, buildTerrainMesh, toVec } from './terrain.js';
 import { RUNWAYS, buildRunways } from './runways.js';
@@ -25,9 +25,12 @@ const INDOOR_BG = new THREE.Color(0xaab7c4);
 const scene = new THREE.Scene();
 scene.background = SKY;
 const camera = new THREE.PerspectiveCamera(45, 1, 1, 120000);
-const controls = new MapControls(camera, renderer.domElement);
+// 操作は山梨・横浜の3Dマップと揃える: 左ドラッグ (1本指) で回転、右ドラッグ (2本指) で移動、
+// ホイール (ピンチ) でカーソル位置に向かってズーム
+const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.maxPolarAngle = Math.PI * 0.47;
+controls.screenSpacePanning = false; // 移動は地面に沿って
+controls.maxPolarAngle = THREE.MathUtils.degToRad(86);
 controls.zoomToCursor = true;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x6b7280, 1.6));
@@ -143,28 +146,36 @@ function setMode(next, floor) {
   scene.fog = isExt ? new THREE.Fog(SKY, 18000, 60000) : null;
   for (const [id, t] of indoor) t.view.group.visible = id === mode;
   hideInfo();
-  if (isExt) {
-    controls.minDistance = 300;
-    controls.maxDistance = 40000;
-    flyTo(toVec(400, -1500, 40), 11000, 0.85, -0.3);
-  } else {
+  if (!isExt) {
     const t = indoor.get(mode);
     if (floor != null && t.view.floors.has(floor)) t.floor = floor;
     if (t.floor === 0) t.floor = 1;
     t.view.showFloor(t.floor);
     t.view.setBadgeFilter(badgeKeys);
-    const bb = t.view.floors.get(t.floor).bbox;
-    const c = { x: (bb[0] + bb[2]) / 2, y: (bb[1] + bb[3]) / 2 };
-    const size = Math.max(bb[2] - bb[0], bb[3] - bb[1], 150);
-    controls.minDistance = 20;
-    controls.maxDistance = 4000;
-    flyTo(toVec(c.x, c.y, floorBase(t.floor)), size * 1.25, 0.75, -0.3);
   }
+  overview();
   renderNav();
   renderFloors();
   renderSide();
   const hash = isExt ? '' : `#${mode}/${indoor.get(mode).floor}`;
   if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
+}
+
+/** 最初の視点に戻す (外観は空港全体、屋内は表示中の階の全体) */
+function overview() {
+  if (mode === 'exterior') {
+    controls.minDistance = 300;
+    controls.maxDistance = 40000;
+    flyTo(toVec(400, -1500, 40), 11000, 0.85, -0.3);
+    return;
+  }
+  const t = indoor.get(mode);
+  const bb = t.view.floors.get(t.floor).bbox;
+  const c = { x: (bb[0] + bb[2]) / 2, y: (bb[1] + bb[3]) / 2 };
+  const size = Math.max(bb[2] - bb[0], bb[3] - bb[1], 150);
+  controls.minDistance = 20;
+  controls.maxDistance = 4000;
+  flyTo(toVec(c.x, c.y, floorBase(t.floor)), size * 1.25, 0.75, -0.3);
 }
 
 // --- 画面の部品 ---
@@ -221,7 +232,13 @@ function renderSide() {
   const side = document.createElement('details');
   side.open = sideOpen;
   side.ontoggle = () => { sideOpen = side.open; };
-  panel.replaceChildren(side);
+  // 「全体を見る」は凡例を畳んでいても押せるように外に置く
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.id = 'btn-overview';
+  reset.textContent = '全体を見る';
+  reset.onclick = overview;
+  panel.replaceChildren(reset, side);
   const h = document.createElement('summary');
   side.appendChild(h);
   if (mode === 'exterior') {
@@ -243,7 +260,7 @@ function renderSide() {
     pl.append(cb, '飛行機の離着陸（模擬）');
     const p = document.createElement('p');
     p.className = 'note';
-    p.textContent = 'ドラッグで移動、右ドラッグ（2本指）で回転、ホイール（ピンチ）で拡大。ターミナルをクリックすると屋内を表示します。';
+    p.textContent = 'ドラッグで回転、右ドラッグ（2本指）で移動、ホイール（ピンチ）でズーム。ターミナルをクリックすると屋内を表示します。';
     side.append(ex, pl, p);
     return;
   }
@@ -286,7 +303,7 @@ function renderSide() {
   ul.appendChild(li);
   const p = document.createElement('p');
   p.className = 'note';
-  p.textContent = 'チェックで階段・エレベーター・エスカレーター・トイレのアイコンを表示します。区画をクリックすると種類を表示します。店名はデータに含まれていません（2021年3月時点のデータ）。';
+  p.textContent = 'ドラッグで回転、右ドラッグ（2本指）で移動、ホイール（ピンチ）でズーム。チェックで階段・エレベーター・エスカレーター・トイレのアイコンを表示します。区画をクリックすると種類を表示します。店名はデータに含まれていません（2021年3月時点のデータ）。';
   side.append(ul, p);
 }
 
@@ -307,10 +324,15 @@ function hideInfo() { $('info').hidden = true; }
 
 // --- クリック ---
 const ray = new THREE.Raycaster();
+// クリック (タップ) とみなすのは、動きが 6px 未満で 0.5 秒未満のとき (山梨・横浜と同じ)
 let down = null;
-renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+  if (!down || !e.isPrimary) return;
+  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+  const quick = performance.now() - down.t < 500;
+  down = null;
+  if (moved >= 6 || !quick) return;
   const r = renderer.domElement.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   if (mode === 'exterior') {

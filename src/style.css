@@ -67,6 +67,7 @@ button[aria-pressed='true'] { background: var(--accent); border-color: var(--acc
   left: 12px; bottom: 48px; max-width: 280px;
   max-height: calc(100% - 140px); overflow-y: auto;
 }
+#btn-overview { width: 100%; margin-bottom: 8px; }
 #side summary { font-weight: 600; cursor: pointer; margin-bottom: 4px; }
 #side ul { list-style: none; margin: 0; padding: 0; }
 #side li { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
