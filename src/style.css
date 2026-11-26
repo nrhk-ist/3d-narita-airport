@@ -1,0 +1,122 @@
+:root {
+  --bg: #dfe8f1;
+  --panel: rgba(255, 255, 255, 0.94);
+  --text: #1f2933;
+  --muted: #52606d;
+  --line: #cbd2d9;
+  --accent: #1d4ed8;
+  --accent-text: #ffffff;
+  --shadow: 0 2px 10px rgba(15, 23, 42, 0.18);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111827;
+    --panel: rgba(17, 24, 39, 0.92);
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --line: #374151;
+    --accent: #3b82f6;
+    --shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: system-ui, -apple-system, 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+#app { position: fixed; inset: 0; }
+#scene { position: absolute; inset: 0; z-index: 0; }
+#scene canvas { display: block; }
+
+#bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--panel); box-shadow: var(--shadow);
+}
+#bar h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+#views { display: flex; gap: 4px; flex-wrap: wrap; }
+button {
+  font: inherit; font-size: 14px; color: var(--text);
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+.panel {
+  position: absolute; z-index: 2;
+  background: var(--panel); box-shadow: var(--shadow); border-radius: 8px;
+  padding: 10px 12px; font-size: 13px;
+}
+#floors {
+  right: 12px; top: calc(var(--bar-h, 52px) + 12px);
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: calc(100% - 140px); overflow-y: auto;
+}
+#floors h2, #side h2 { font-size: 13px; margin: 0 0 6px; }
+#floors button { text-align: left; min-width: 84px; }
+#side {
+  left: 12px; bottom: 48px; max-width: 280px;
+  max-height: calc(100% - 140px); overflow-y: auto;
+}
+#side summary { font-weight: 600; cursor: pointer; margin-bottom: 4px; }
+#side ul { list-style: none; margin: 0; padding: 0; }
+#side li { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+#side .note { color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+#side label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.25); flex: none; }
+
+#info {
+  right: 12px; bottom: 48px; max-width: 280px;
+}
+#info h3 { margin: 0 0 4px; font-size: 14px; }
+#info p { margin: 2px 0; color: var(--muted); }
+
+#credit {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 6px 12px; font-size: 12px;
+  background: var(--panel);
+}
+#credit button { font-size: 12px; padding: 3px 8px; }
+#credit-body { max-height: 40vh; overflow-y: auto; }
+#credit-body p { margin: 6px 0; line-height: 1.5; }
+#credit a { color: var(--accent); word-break: break-all; }
+
+#loading {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg); font-size: 16px;
+}
+#loading[hidden] { display: none; }
+
+/* 3D の上に重ねるラベル */
+.label {
+  font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  background: rgba(255, 255, 255, 0.9); color: #1f2933;
+  border: 1px solid rgba(0, 0, 0, 0.2); white-space: nowrap; pointer-events: none;
+}
+.label.big { font-size: 14px; font-weight: 600; }
+.label.exit { background: #fef3c7; }
+.badge {
+  font-size: 11px; font-weight: 700; line-height: 1;
+  padding: 3px 4px; border-radius: 4px; color: #fff; white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.9); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  #bar h1 { font-size: 14px; width: 100%; }
+  button { font-size: 13px; padding: 5px 8px; }
+  #floors { right: 8px; padding: 6px; }
+  #floors button { min-width: 64px; }
+  #side { left: 8px; bottom: 44px; max-width: calc(100% - 100px); font-size: 12px; max-height: 38%; }
+  #info { left: 8px; right: 8px; bottom: 44px; max-width: none; }
+}
