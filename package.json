@@ -1,0 +1,22 @@
+{
+  "name": "3d-narita-airport",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "data:indoor": "node scripts/build-indoor.mjs",
+    "data:terrain": "node scripts/build-terrain.mjs",
+    "data": "npm run data:indoor && npm run data:terrain"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "fflate": "0.8.2",
+    "sharp": "0.35.5",
+    "vite": "7.3.8"
+  }
+}

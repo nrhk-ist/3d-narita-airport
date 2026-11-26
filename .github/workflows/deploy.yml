@@ -1,0 +1,45 @@
+name: GitHub Pages に公開
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 屋内地図はリポジトリの元データ (data/source) から作り直す
+      - run: npm run data:indoor
+      # 地形・空中写真は国土地理院のタイルから作り直す。取得できなければリポジトリにある前回の分を使う
+      - name: 地形データを作り直す
+        run: npm run data:terrain || (git checkout -- public/data && echo "::warning::国土地理院のタイルを取得できなかったため、前回の地形データを使います")
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
